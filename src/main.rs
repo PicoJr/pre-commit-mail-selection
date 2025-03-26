@@ -1,0 +1,92 @@
+use std::{collections::HashSet, path::Path, vec};
+
+use dialoguer::Select;
+use git2::{Config, Repository};
+use serde::{Deserialize, Serialize};
+
+#[derive(Serialize, Deserialize)]
+struct GitEmails {
+    emails: Vec<String>,
+}
+
+#[derive(Default)]
+struct GitEmailsConfig {
+    local_email: Option<String>,
+    global_email: Option<String>,
+    local_emails: Vec<String>,
+}
+
+fn get_emails() -> anyhow::Result<GitEmailsConfig> {
+    let mut git_emails_config = GitEmailsConfig::default();
+    // 0 try reading email from local config
+    if let Ok(repo) = Repository::open(".") {
+        if let Ok(local_config) = repo.config() {
+            if let Ok(user_mail) = local_config.get_string("user.email") {
+                git_emails_config.local_email = Some(user_mail);
+            }
+        }
+    }
+    // 1 try reading emails from global config
+    if let Ok(global_config) = Config::open_default() {
+        if let Ok(user_mail) = global_config.get_string("user.email") {
+            git_emails_config.global_email = Some(user_mail);
+        }
+    }
+    // 2 try reading emails from local .git-emails.toml file
+    let email_config_path = Path::new(".git-emails.toml");
+    if email_config_path.exists() {
+        let content: String = std::fs::read_to_string(email_config_path)?;
+        let git_emails: GitEmails = toml::from_str(content.as_str())?;
+        git_emails_config.local_emails = git_emails.emails;
+    }
+    Ok(git_emails_config)
+}
+
+fn main() -> anyhow::Result<()> {
+    let emails = get_emails()?;
+    /* 0: local email
+     * 1: global email
+     *
+     * emails declared in .git-emails.toml
+     */
+    let mut all_emails: Vec<String> = vec![];
+    let mut unique_emails: HashSet<String> = HashSet::new();
+    match (emails.local_email, emails.global_email) {
+        (Some(email), None) | (None, Some(email)) => {
+            all_emails.push(email.clone());
+            unique_emails.insert(email.clone());
+        }
+        (Some(local_email), Some(global_email)) => {
+            all_emails.push(local_email.clone());
+            unique_emails.insert(local_email.clone());
+            if local_email != global_email {
+                all_emails.push(global_email.clone());
+                unique_emails.insert(global_email.clone());
+            }
+        }
+        _ => {}
+    }
+    for email in emails.local_emails.iter() {
+        if !unique_emails.contains(email) {
+            all_emails.push(email.clone());
+            unique_emails.insert(email.clone());
+        }
+    }
+
+    // do not bother if we do not have at least 2 emails to choose from
+    if unique_emails.len() > 1 {
+        let selection = Select::new()
+            .with_prompt("Please select an email for commit")
+            .items(&all_emails)
+            .default(0)
+            .interact()?;
+        let selected_email = all_emails
+            .get(selection)
+            .expect("selection should be valid");
+        // try writing selected email to local config
+        let repo = Repository::open(".")?;
+        let mut local_config = repo.config()?;
+        local_config.set_str("user.email", selected_email)?;
+    }
+    Ok(())
+}
