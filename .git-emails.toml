@@ -1,1 +1,1 @@
-emails = ["foo@bar.com"]
+emails = ["foo@bar.com", "baz@example.com"]

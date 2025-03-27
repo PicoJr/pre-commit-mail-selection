@@ -1,6 +1,7 @@
 use std::{collections::HashSet, path::Path, vec};
 
 use dialoguer::Select;
+use dialoguer::theme::ColorfulTheme;
 use git2::{Config, Repository};
 use serde::{Deserialize, Serialize};
 
@@ -11,12 +12,17 @@ struct GitEmails {
 
 #[derive(Default)]
 struct GitEmailsConfig {
-    local_email: Option<String>,
-    global_email: Option<String>,
-    local_emails: Vec<String>,
+    local_email: Option<String>,  // from current repo, .git/config
+    global_email: Option<String>, // from e.g. ~/.gitconfig
+    local_emails: Vec<String>,    // from .git-emails.toml if any
 }
 
-fn get_emails() -> anyhow::Result<GitEmailsConfig> {
+/** List available emails
+* * from local config if any
+* * from global config if any
+* * from local .git-emails.toml if any
+*/
+fn get_config_emails() -> anyhow::Result<GitEmailsConfig> {
     let mut git_emails_config = GitEmailsConfig::default();
     // 0 try reading email from local config
     if let Ok(repo) = Repository::open(".") {
@@ -42,13 +48,13 @@ fn get_emails() -> anyhow::Result<GitEmailsConfig> {
     Ok(git_emails_config)
 }
 
-fn main() -> anyhow::Result<()> {
-    let emails = get_emails()?;
-    /* 0: local email
-     * 1: global email
-     *
-     * emails declared in .git-emails.toml
-     */
+/** Returns an ordered list of emails with no duplicates
+*
+* 0. email as declared locally in current repository in .git/config if any
+* 1. email as configured globally if any
+* 2. emails declared in .git-emails.toml if any
+*/
+fn get_unique_emails_ordered(emails: GitEmailsConfig) -> Vec<String> {
     let mut all_emails: Vec<String> = vec![];
     let mut unique_emails: HashSet<String> = HashSet::new();
     match (emails.local_email, emails.global_email) {
@@ -72,15 +78,21 @@ fn main() -> anyhow::Result<()> {
             unique_emails.insert(email.clone());
         }
     }
+    all_emails
+}
+
+fn main() -> anyhow::Result<()> {
+    let emails = get_config_emails()?;
+    let unique_emails_ordered = get_unique_emails_ordered(emails);
 
     // do not bother if we do not have at least 2 emails to choose from
-    if unique_emails.len() > 1 {
-        let selection = Select::new()
+    if unique_emails_ordered.len() > 1 {
+        let selection = Select::with_theme(&ColorfulTheme::default())
             .with_prompt("Please select an email for commit")
-            .items(&all_emails)
-            .default(0)
+            .items(&unique_emails_ordered)
+            .default(0) // default to the email configured in .git/config
             .interact()?;
-        let selected_email = all_emails
+        let selected_email = unique_emails_ordered
             .get(selection)
             .expect("selection should be valid");
         // try writing selected email to local config
